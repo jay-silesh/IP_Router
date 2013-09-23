@@ -8,13 +8,19 @@
 #include<pthread.h>
 #include<pcap.h>
 
+#define ETH_HDRLEN 14      // Ethernet header length
+#define IP4_HDRLEN 20      // IPv4 header length
+#define ARP_HDRLEN 28      // ARP header length
+#define ARPOP_REQUEST 1    // Taken from <linux/if_arp.h>
+#define ARPOP_REPLY 2         // Taken from <linux/if_arp.h>
+
 
 
 typedef struct 
 {
 	long next_hop_ip_addr;
 	long nw_addr;
-	char *mac_addr;
+	uint8_t *mac_addr;
 	char *interface_name;
 }forwarding_address;
 
@@ -28,7 +34,7 @@ typedef struct
 	u_char *frame;
 }waitQueueEntry;
 
-queue<waitQueueEntry> waitQueue;
+queue<waitQueueEntry *> waitQueue;
 pthread_mutex_t waitQueueMutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t packetReceivedSignal= PTHREAD_COND_INITIALIZER;
 

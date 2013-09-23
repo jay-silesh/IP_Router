@@ -1,13 +1,25 @@
 #include"Functions.h"
 
 
-void* receive_arp_packet(void* arg1)
+
+
+char* uint8_to_char(uint8_t *a)
+{
+	char temp_mac[6];
+	snprintf(temp_mac,6,"%02x%02x%02x%02x%02x%02x",a[6],a[7],a[8],a[9],a[10],a[11]);
+	return temp_mac;
+}
+
+
+
+char* receive_arp_packet()
 {
   int i, sd, status;
   uint8_t *ether_frame;
   arp_hdr *arphdr;
 
   ether_frame = allocate_ustrmem (IP_MAXPACKET);
+
   if ((sd = socket (PF_PACKET, SOCK_RAW, htons (ETH_P_ALL))) < 0) {
     perror ("socket() failed ");
     exit (EXIT_FAILURE);
@@ -26,11 +38,9 @@ void* receive_arp_packet(void* arg1)
     }
   }
   close (sd);
-  global_temp_mac=ether_frame+6;
-
+  char *temp_mac_addr=uint8_to_char(ether_frame);
+  return temp_mac_addr;
 }
-
-
 
 void SendArpRequestFrame(char *iface, char *source_ip, char *next_hop_ip)
 {
@@ -42,11 +52,6 @@ void SendArpRequestFrame(char *iface, char *source_ip, char *next_hop_ip)
   struct sockaddr_in *ipv4;
   struct sockaddr_ll device;
   struct ifreq ifr;
-
-
-  pthread_t thread1;
-  pthread_create(&thread1,NULL,receive_arp_packet,NULL);
-
 
   // Allocate memory for various arrays.
   src_mac = allocate_ustrmem (6);
@@ -70,7 +75,7 @@ void SendArpRequestFrame(char *iface, char *source_ip, char *next_hop_ip)
   snprintf (ifr.ifr_name, sizeof (ifr.ifr_name), "%s", interface);
   if (ioctl (sd, SIOCGIFHWADDR, &ifr) < 0) {
     perror ("ioctl() failed to get source MAC address ");
-    exit(EXIT_FAILURE);
+    return (EXIT_FAILURE);
   }
   close (sd);
 
@@ -147,20 +152,38 @@ void SendArpRequestFrame(char *iface, char *source_ip, char *next_hop_ip)
   // OpCode: 1 for ARP request
   arphdr.opcode = htons (ARPOP_REQUEST);
 
+  // Sender hardware address (48 bits): MAC address
   memcpy (&arphdr.sender_mac, src_mac, 6 * sizeof (uint8_t));
 
+  // Sender protocol address (32 bits)
+  // See getaddrinfo() resolution of src_ip.
+
+  // Target hardware address (48 bits): zero, since we don't know it yet.
   memset (&arphdr.target_mac, 0, 6 * sizeof (uint8_t));
+
+  // Target protocol address (32 bits)
+  // See getaddrinfo() resolution of target.
+
+  // Fill out ethernet frame header.
+
+  // Ethernet frame length = ethernet header (MAC + MAC + ethernet type) + ethernet data (ARP header)
   frame_length = 6 + 6 + 2 + ARP_HDRLEN;
 
   // Destination and Source MAC addresses
   memcpy (ether_frame, dst_mac, 6 * sizeof (uint8_t));
   memcpy (ether_frame + 6, src_mac, 6 * sizeof (uint8_t));
 
+  // Next is ethernet type code (ETH_P_ARP for ARP).
+  // http://www.iana.org/assignments/ethernet-numbers
   ether_frame[12] = ETH_P_ARP / 256;
   ether_frame[13] = ETH_P_ARP % 256;
 
+  // Next is ethernet frame data (ARP header).
+
+  // ARP header
   memcpy (ether_frame + ETH_HDRLEN, &arphdr, ARP_HDRLEN * sizeof (uint8_t));
 
+  // Submit request for a raw socket descriptor.
   if ((sd = socket (PF_PACKET, SOCK_RAW, htons (ETH_P_ALL))) < 0) {
     perror ("socket() failed ");
     exit (EXIT_FAILURE);
@@ -182,19 +205,15 @@ void SendArpRequestFrame(char *iface, char *source_ip, char *next_hop_ip)
   free (interface);
   free (target);
   free (src_ip);
-
-  pthread_join(thread1,NULL);
 }
 
 
 
 
-uint8_t* get_mac_nexthop(char *iface, char *source_ip, char *next_hop_ip)
+char* get_mac_nexthop(char *iface, char *source_ip, char *next_hop_ip)
 {
 	SendArpRequestFrame(iface,source_ip,next_hop_ip );
-	uint8_t* temp_mac=(uint8_t*)malloc(sizeof(uint8_t)*6);
-	memcpy(temp_mac,global_temp_mac,sizeof(uint8_t)*6);
-	return temp_mac;
+	return (receive_arp_packet());
 }
 
 
@@ -207,10 +226,10 @@ bool init(char* interface1, char* interface2)
 	forwarding_address * entries[2];
 		
 	int mask[2]={29,23};
-	uint8_t*mac1= get_mac_nexthop("eth2","10.99.0.3","10.99.0.1");
-	entries[0]= create_forward_structure( ip_to_long_ip("10.99.0.1"),ip_to_long_ip("10.1.0.0"),mac1,interface2);
 
-	uint8_t* mac2=get_mac_nexthop("eth2","10.99.0.3","10.99.0.2");
+	char *mac1=get_mac_nexthop(interface2,"10.99.0.3","10.99.0.1");
+	char *mac2=get_mac_nexthop(interface2,"10.99.0.3","10.99.0.2");
+	entries[0]= create_forward_structure( ip_to_long_ip("10.99.0.1"),ip_to_long_ip("10.1.0.0"), mac1,interface2);
 	entries[1]= create_forward_structure( ip_to_long_ip("10.99.0.2"),ip_to_long_ip("10.1.2.0"),mac2,interface2);
 
 	for(int i=0;i<2;i++)
@@ -296,64 +315,16 @@ void callback(u_char *args, const struct pcap_pkthdr *header, const u_char* fram
 void ProcessReceivedFrame();
 {
 
+	//wait for the signal
+	//if queue is empty go back to conditional wait
+	//else 
+	// process the packet
+	// First Decreemnt TTL 
+
 	//conditions to be checked for routing;
 	//1. if the packet is a broadcast or multicast then drop it
 	//2. if packet is destined to a network that router is directly connected then drop it
 	//
-
-	while(1)
-	{
-		waitQueueEntry* queueEntry = NULL;
-		pthread_mutex_lock(&waitQueueMutex);
-		if(!waitQueue.empty())
-		{
-			queueEntry = (waitQueueEntry*)waitQueue.front();
-			waitQueue.pop();
-		}
-		else
-		{
-			while(waitQueue.empty())
-				pthread_cond_wait(&packetReceivedSignal, &waitQueueMutex);
-			
-			queueEntry = (waitQueueEntry*)waitQueue.front();
-			waitQueue.pop();
-		}
-		pthread_mutex_unlock(&waitQueueMutex);
-
-		// here first check the type of the received packet and do processing differently based on the type.
-		
-		struct sniff_ethernet *ethernet;
-		struct sniff_ip* ipPacket;
- 
-		if(!IsPacketAddressedToLocalNet(queueEntry->frame))
-		{
-			//Decrement the TTL, if TTL is 0 then send the ICMP TIME EXCEEDED packet to the
-			ipPacket = (struct sniff_ip*)(queueEntry->frame + SIZE_ETHERNET);
-			
-			//Take the destination IP and consult the routing table.
-			
-			//Now decrement TTL, if TTL = 0 then send the ICMP time exceeded message to the source IP address.(again consult route table and send)
-
-			int ttl = atoi(ntohs(ipPacket->ip_ttl));
-			ttl--;
-			if( ttl <= 0)
-			{
-				//Now send the ICMP time exceeded packet to the source IP
-			}
-			else
-			{
-				
-				//Process and Send the packet to next hop router obtained when we consulted routing table.
-			}		
-			 
-		}
-
-		// free up the data
-		free(queueEntry->frame);
-		free(queueEntry->pcapHeader);
-		free(queueEntry);		 
-					
-	}
 
 }
 
@@ -376,37 +347,6 @@ allocate_ustrmem (int len)
 
 
 
-// Allocate memory for an array of chars.
-char *
-allocate_strmem (int len)
-{
-  void *tmp;
-
-  tmp = (char *) malloc (len * sizeof (char));
-  if (tmp != NULL) {
-    memset (tmp, 0, len * sizeof (char));
-    return (tmp);
-  } else {
-    fprintf (stderr, "ERROR: Cannot allocate memory for array allocate_strmem().\n");
-    exit (EXIT_FAILURE);
-  }
-}
-
-// Allocate memory for an array of ints.
-int *
-allocate_intmem (int len)
-{
-  void *tmp;
-
-  tmp = (int *) malloc (len * sizeof (int));
-  if (tmp != NULL) {
-    memset (tmp, 0, len * sizeof (int));
-    return (tmp);
-  } else {
-    fprintf (stderr, "ERROR: Cannot allocate memory for array allocate_intmem().\n");
-    exit (EXIT_FAILURE);
-  }
-}
 
 
 

@@ -1,0 +1,223 @@
+#include"Functions.h"
+
+
+void receive_arp_packet()
+{
+  int i, sd, status;
+  uint8_t *ether_frame;
+  arp_hdr *arphdr;
+
+  ether_frame = allocate_ustrmem (IP_MAXPACKET);
+
+  if ((sd = socket (PF_PACKET, SOCK_RAW, htons (ETH_P_ALL))) < 0) {
+    perror ("socket() failed ");
+    exit (EXIT_FAILURE);
+  }
+
+  arphdr = (arp_hdr *) (ether_frame + 6 + 6 + 2);
+  while (((((ether_frame[12]) << 8) + ether_frame[13]) != ETH_P_ARP) || (ntohs (arphdr->opcode) != ARPOP_REPLY)) {
+    if ((status = recv (sd, ether_frame, IP_MAXPACKET, 0)) < 0) {
+      if (errno == EINTR) {
+        memset (ether_frame, 0, IP_MAXPACKET * sizeof (uint8_t));
+        continue;  // Something weird happened, but let's try again.
+      } else {
+        perror ("recv() failed:");
+        exit (EXIT_FAILURE);
+      }
+    }
+  }
+  close (sd);
+  for (i=0; i<=5; i++)
+    printf ("%02x:", ether_frame[i+6]);
+	
+}
+
+
+void Get_All_Mac_Address()
+{
+  
+  receive_arp_packet();
+
+
+}
+
+
+bool init(char* interface1, char* interface2)
+{
+
+	Get_All_Mac_Address();
+
+	forwarding_address * entries[3];
+		
+	int mask[3]={30,29,23};
+	entries[0]= create_forward_structure( ip_to_long_ip("10.10.0.1"),ip_to_long_ip("10.10.0.0"),NULL,interface1);
+	entries[1]= create_forward_structure( ip_to_long_ip("10.99.0.1"),ip_to_long_ip("10.1.0.0"), NULL,interface2);
+	entries[2]= create_forward_structure( ip_to_long_ip("10.99.0.2"),ip_to_long_ip("10.1.2.0"),NULL,interface2);
+
+	for(int i=0;i<3;i++)
+		routing_table.insert(pair<uint32_t,forwarding_address *>(mask_to_int(mask[i]),entries[i]));
+
+
+	//Here get the mac address using arp code and store the mac address into the routing table
+
+	if ((arpRawSocket = socket (AF_INET, SOCK_RAW, IPPROTO_RAW)) < 0) {
+		perror ("socket() failed to create RAW socket for sending ARP request ");
+		exit (EXIT_FAILURE);
+	  }
+
+}
+
+uint8_t* GetMACAddressFromInterface(char* interface)
+{
+
+	uint8_t *mac = (uint8_t*)allocate_ustrmem(6);	
+	struct ifreq ifr;
+	memset (&ifr, 0, sizeof (ifr));
+	snprintf (ifr.ifr_name, sizeof (ifr.ifr_name), "%s", interface);
+	if (ioctl (arpRawSocket, SIOCGIFHWADDR, &ifr) < 0) {
+		perror ("ioctl() failed to get source MAC address ");
+		return NULL;
+	}
+	memcpy (mac, ifr.ifr_hwaddr.sa_data, 6 * sizeof (uint8_t));
+
+	return mac;
+}
+
+void start(char* interface1, char* interface2)
+{
+
+	// start two threads for pcap
+
+	// start frame processing thread
+
+}
+
+
+void callback(u_char *args, const struct pcap_pkthdr *header, const u_char* frame)
+{
+	waitQueueEntry *entry = (waitQueueEntry*)malloc(sizeof(waitQueueEntry));
+
+	//copy the const frame to new memory
+	
+	
+
+	
+
+	
+	
+	waitQueueEntry *entry = (waitQueueEntry*)malloc(sizeof(waitQueueEntry));
+	entry->pcapHeader = header;
+	entry->frame = (char *)malloc(strlen(frame));
+	strncpy(entry->frame,frame,strlen(frame));
+
+	//lock mutex
+
+	pthread_mutex_lock(&waitQueueMutex);
+	{
+		//add to queue 
+		//signal frame processing thread	
+		if(waitQueue.empty())
+		{
+			waitQueue.push(entry);
+			pthred_cond_signal(&packetReceivedSignal);
+		}
+		else
+		{
+			waitQueue.push(entry);
+		}
+	}
+	
+	//unlock
+	pthread_mutex_unlock(&waitQueueMutex);	
+}
+
+
+
+
+void ProcessReceivedFrame();
+{
+
+	//conditions to be checked for routing;
+	//1. if the packet is a broadcast or multicast then drop it
+	//2. if packet is destined to a network that router is directly connected then drop it
+	//
+
+	while(1)
+	{
+		waitQueueEntry* queueEntry = NULL;
+		pthread_mutex_lock(&waitQueueMutex);
+		if(!waitQueue.empty())
+		{
+			queueEntry = (waitQueueEntry*)waitQueue.front();
+			waitQueue.pop();
+		}
+		else
+		{
+			while(waitQueue.empty())
+				pthread_cond_wait(&packetReceivedSignal, &waitQueueMutex);
+			
+			queueEntry = (waitQueueEntry*)waitQueue.front();
+			waitQueue.pop();
+		}
+		pthread_mutex_unlock(&waitQueueMutex);
+
+		// here first check the type of the received packet and do processing differently based on the type.
+		
+		struct sniff_ethernet *ethernet;
+		struct sniff_ip* ipPacket;
+ 
+		if(!IsPacketAddressedToLocalNet(queueEntry->frame))
+		{
+			//Decrement the TTL, if TTL is 0 then send the ICMP TIME EXCEEDED packet to the
+			ipPacket = (struct sniff_ip*)(queueEntry->frame + SIZE_ETHERNET);
+			
+			//Take the destination IP and consult the routing table.
+			
+			//Now decrement TTL, if TTL = 0 then send the ICMP time exceeded message to the source IP address.(again consult route table and send)
+
+			int ttl = atoi(ntohs(ipPacket->ip_ttl));
+			ttl--;
+			if( ttl <= 0)
+			{
+				//Now send the ICMP time exceeded packet to the source IP
+			}
+			else
+			{
+				
+				//Process and Send the packet to next hop router obtained when we consulted routing table.
+			}		
+			 
+		}
+
+		// free up the data
+		free(queueEntry->frame);
+		free(queueEntry->pcapHeader);
+		free(queueEntry);		 
+					
+	}
+
+}
+
+
+uint8_t *
+allocate_ustrmem (int len)
+{
+  void *tmp;
+
+  tmp = (uint8_t *) malloc (len * sizeof (uint8_t));
+  if (tmp != NULL) {
+    memset (tmp, 0, len * sizeof (uint8_t));
+    return (tmp);
+  } else {
+    fprintf (stderr, "ERROR: Cannot allocate memory for array allocate_ustrmem().\n");
+    exit (EXIT_FAILURE);
+  }
+}
+
+
+
+
+
+
+
+

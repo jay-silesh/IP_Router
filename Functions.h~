@@ -22,13 +22,6 @@ void ProcessReceivedFrame();
 uint8_t*
 allocate_ustrmem (int len);
 
-
-int *
-allocate_intmem (int len);
-
-char *
-allocate_strmem (int len);
-
 uint8_t* GetMACAddressFromInterface(char* interface);
 
 bool IsPacketAddressedToLocalNet(u_char *packet);
